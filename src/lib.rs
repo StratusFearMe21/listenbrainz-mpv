@@ -2,7 +2,7 @@ use std::{
     io::BufWriter,
     mem::ManuallyDrop,
     num::NonZeroU64,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use calloop::{
@@ -11,7 +11,10 @@ use calloop::{
     EventLoop,
 };
 use dbus::message::MatchRule;
-use libmpv::{events::Event, Mpv, MpvStr};
+use libmpv::{
+    events::{Event, PropertyData},
+    Mpv, MpvStr,
+};
 use libmpv_sys::mpv_handle;
 use serde::Serialize;
 
@@ -26,11 +29,25 @@ macro_rules! cache_path {
     };
 }
 
-#[derive(Serialize, Default, Debug)]
+#[derive(Debug)]
 struct ListenbrainzData {
     payload: Payload,
     scrobble: bool,
     online: bool,
+    scrobble_deadline: Instant,
+    pause_instant: Instant,
+}
+
+impl Default for ListenbrainzData {
+    fn default() -> Self {
+        Self {
+            payload: Payload::default(),
+            scrobble: false,
+            online: false,
+            scrobble_deadline: Instant::now(),
+            pause_instant: Instant::now(),
+        }
+    }
 }
 
 #[derive(Serialize, Debug)]
@@ -98,14 +115,13 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
             panic!("Scrobble failed: {}", status);
         }
     } else {
-        let cache_path = cache_path!();
+        let mut cache_path = cache_path!();
         if !cache_path.exists() {
-            std::fs::create_dir(cache_path).unwrap();
+            std::fs::create_dir(&cache_path).unwrap();
         }
+        cache_path.push(format!("{}.json", payload.listened_at.unwrap()));
         serde_json::to_writer(
-            BufWriter::new(
-                std::fs::File::create(format!("{}.json", payload.listened_at.unwrap())).unwrap(),
-            ),
+            BufWriter::new(std::fs::File::create(cache_path).unwrap()),
             &payload,
         )
         .unwrap();
@@ -114,15 +130,16 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
 
 fn import_cache() {
     let cache_path = cache_path!();
-    if cache_path.exists() {
-        println!("Scrobbling unscrobbled music");
+    if cache_path.exists() && cache_path.read_dir().unwrap().next().is_some() {
         let mut request = br#"{"listen_type":"import","payload":["#.to_vec();
-        for i in std::fs::read_dir("cache_path").unwrap() {
+        for i in std::fs::read_dir(cache_path).unwrap() {
+            let path = i.unwrap().path();
             std::io::copy(
-                &mut std::fs::File::open(i.unwrap().path()).unwrap(),
+                &mut std::fs::File::open(path.as_path()).unwrap(),
                 &mut request,
             )
             .unwrap();
+            std::fs::remove_file(path).unwrap();
             request.push(b',');
         }
         request.pop();
@@ -145,6 +162,9 @@ const USER_TOKEN: &str = dotenv!("USER_TOKEN");
 #[no_mangle]
 pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
     let mut mpv = ManuallyDrop::new(Mpv::new_with_context(ctx).unwrap());
+    mpv.event_context()
+        .observe_property("pause", libmpv::Format::Flag, 0)
+        .unwrap();
     let mut event_loop = EventLoop::<ListenbrainzData>::try_new().unwrap();
     let handle = event_loop.handle();
     let timer = Timer::from_duration(Duration::from_secs(31_536_000));
@@ -174,19 +194,50 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
         .insert_source(rx, move |_event, _metadata, data| loop {
             match mpv.event_context_mut().wait_event(0.0) {
                 Some(Ok(Event::Shutdown)) => signal.stop(),
+                Some(Ok(Event::PropertyChange { name, change, .. })) => {
+                    if name == "pause" {
+                        let PropertyData::Flag(paused) = change else {
+                            unreachable!();
+                        };
+
+                        if paused {
+                            data.pause_instant = Instant::now();
+                            rx_handle.remove(timer);
+                        } else {
+                            timer = rx_handle
+                                .insert_source(
+                                    Timer::from_deadline(
+                                        data.scrobble_deadline + data.pause_instant.elapsed(),
+                                    ),
+                                    |_event, _metadata, data| {
+                                        if data.scrobble {
+                                            data.payload.listened_at = NonZeroU64::new(
+                                                SystemTime::now()
+                                                    .duration_since(SystemTime::UNIX_EPOCH)
+                                                    .unwrap()
+                                                    .as_secs(),
+                                            );
+                                            scrobble("single", &data.payload, data.online);
+                                        }
+                                        calloop::timer::TimeoutAction::Drop
+                                    },
+                                )
+                                .unwrap();
+                        }
+                    }
+                }
                 Some(Ok(Event::PlaybackRestart)) => {
                     let audio_pts: Result<i64, libmpv::Error> = mpv.get_property("audio-pts");
                     if audio_pts.is_err() || audio_pts.unwrap() < 1 {
                         data.payload = Payload::default();
                         rx_handle.remove(timer);
                         let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
+                        data.scrobble_deadline =
+                            Instant::now() + Duration::from_secs(std::cmp::min(240, duration / 2));
                         data.payload.track_metadata.additional_info.duration_ms = duration * 1000;
                         timer = rx_handle
                             .insert_source(
-                                Timer::from_duration(Duration::from_secs(std::cmp::min(
-                                    240,
-                                    duration / 2,
-                                ))),
+                                Timer::from_deadline(data.scrobble_deadline),
                                 |_event, _metadata, data| {
                                     if data.scrobble {
                                         data.payload.listened_at = NonZeroU64::new(
