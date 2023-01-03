@@ -127,7 +127,6 @@ fn import_cache() {
         }
         request.pop();
         request.extend_from_slice(b"]}");
-        std::fs::remove_dir_all(cache_path).unwrap();
         let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
             .set("Authorization", USER_TOKEN)
             .set("Content-Type", "json")
@@ -178,7 +177,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                 Some(Ok(Event::PlaybackRestart)) => {
                     let audio_pts: Result<i64, libmpv::Error> = mpv.get_property("audio-pts");
                     if audio_pts.is_err() || audio_pts.unwrap() < 1 {
-                        *data = ListenbrainzData::default();
+                        data.payload = Payload::default();
                         rx_handle.remove(timer);
                         let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
                         data.payload.track_metadata.additional_info.duration_ms = duration * 1000;
@@ -278,6 +277,13 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
             )
             .unwrap();
 
+        let state = properties
+            .get("State")
+            .unwrap()
+            .0
+            .as_str()
+            .unwrap_or_default();
+
         handle
             .insert_source(system_connection, |event, _metadata, data| {
                 if let Some(member) = event.member() {
@@ -289,6 +295,10 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             data.online = val == "ready" || val == "online";
                             if data.online {
                                 import_cache();
+                                if data.scrobble {
+                                    data.payload.listened_at = None;
+                                    scrobble("playing_now", &data.payload, data.online);
+                                }
                             }
                         }
                     }
@@ -296,12 +306,6 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                 None
             })
             .unwrap();
-        let state = properties
-            .get("State")
-            .unwrap()
-            .0
-            .as_str()
-            .unwrap_or_default();
         state == "ready" || state == "online"
     };
     drop(handle);
