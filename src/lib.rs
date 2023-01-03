@@ -1,5 +1,6 @@
 use std::{
     mem::ManuallyDrop,
+    num::NonZeroU64,
     time::{Duration, SystemTime},
 };
 
@@ -27,7 +28,7 @@ struct ListenbrainzSingleListen<'a> {
 #[derive(Serialize, Default, Debug)]
 struct Payload {
     #[serde(skip_serializing_if = "Option::is_none")]
-    listened_at: Option<u64>,
+    listened_at: Option<NonZeroU64>,
     track_metadata: TrackMetadata,
 }
 
@@ -96,7 +97,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
         .insert_source(timer, |_event, _metadata, data| {
             println!("How? How has MPV not loaded your file for an entire year?");
             if data.scrobble {
-                data.payload.listened_at = Some(
+                data.payload.listened_at = NonZeroU64::new(
                     SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap()
@@ -133,7 +134,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                 ))),
                                 |_event, _metadata, data| {
                                     if data.scrobble {
-                                        data.payload.listened_at = Some(
+                                        data.payload.listened_at = NonZeroU64::new(
                                             SystemTime::now()
                                                 .duration_since(SystemTime::UNIX_EPOCH)
                                                 .unwrap()
@@ -202,6 +203,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
             }
         })
         .unwrap();
+    drop(handle);
     event_loop
         .run(None, &mut ListenbrainzData::default(), |_| {})
         .unwrap();
