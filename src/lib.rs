@@ -169,18 +169,8 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
     let handle = event_loop.handle();
     let timer = Timer::from_duration(Duration::from_secs(31_536_000));
     let mut timer = handle
-        .insert_source(timer, |_event, _metadata, data| {
-            println!("How? How has MPV not loaded your file for an entire year?");
-            if data.scrobble {
-                data.payload.listened_at = NonZeroU64::new(
-                    SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                );
-                scrobble("single", &data.payload, data.online);
-            }
-            calloop::timer::TimeoutAction::Drop
+        .insert_source(timer, |_event, _metadata, _data| {
+            panic!("Something has gone horibbly wrong, somehow, mpv has been loading for an entire year!");
         })
         .unwrap();
     let (tx, rx): (Sender<()>, Channel<()>) = calloop::channel::channel();
@@ -189,6 +179,23 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
     let signal = event_loop.get_signal();
 
     let rx_handle = event_loop.handle();
+
+    fn timer_event(
+        _event: Instant,
+        _metadata: &mut (),
+        data: &mut ListenbrainzData,
+    ) -> calloop::timer::TimeoutAction {
+        if data.scrobble {
+            data.payload.listened_at = NonZeroU64::new(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            );
+            scrobble("single", &data.payload, data.online);
+        }
+        calloop::timer::TimeoutAction::Drop
+    }
 
     handle
         .insert_source(rx, move |_event, _metadata, data| loop {
@@ -209,18 +216,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                     Timer::from_deadline(
                                         data.scrobble_deadline + data.pause_instant.elapsed(),
                                     ),
-                                    |_event, _metadata, data| {
-                                        if data.scrobble {
-                                            data.payload.listened_at = NonZeroU64::new(
-                                                SystemTime::now()
-                                                    .duration_since(SystemTime::UNIX_EPOCH)
-                                                    .unwrap()
-                                                    .as_secs(),
-                                            );
-                                            scrobble("single", &data.payload, data.online);
-                                        }
-                                        calloop::timer::TimeoutAction::Drop
-                                    },
+                                    timer_event,
                                 )
                                 .unwrap();
                         }
@@ -238,18 +234,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                         timer = rx_handle
                             .insert_source(
                                 Timer::from_deadline(data.scrobble_deadline),
-                                |_event, _metadata, data| {
-                                    if data.scrobble {
-                                        data.payload.listened_at = NonZeroU64::new(
-                                            SystemTime::now()
-                                                .duration_since(SystemTime::UNIX_EPOCH)
-                                                .unwrap()
-                                                .as_secs(),
-                                        );
-                                        scrobble("single", &data.payload, data.online);
-                                    }
-                                    calloop::timer::TimeoutAction::Drop
-                                },
+                                timer_event,
                             )
                             .unwrap();
 
