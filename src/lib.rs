@@ -1,4 +1,5 @@
 use std::{
+    io::BufWriter,
     mem::ManuallyDrop,
     num::NonZeroU64,
     time::{Duration, SystemTime},
@@ -9,14 +10,27 @@ use calloop::{
     timer::Timer,
     EventLoop,
 };
+use dbus::message::MatchRule;
 use libmpv::{events::Event, Mpv, MpvStr};
 use libmpv_sys::mpv_handle;
 use serde::Serialize;
+
+mod connman;
+
+macro_rules! cache_path {
+    () => {
+        dirs::home_dir()
+            .unwrap()
+            .join(dirs::cache_dir().unwrap())
+            .join("listenbrainz")
+    };
+}
 
 #[derive(Serialize, Default, Debug)]
 struct ListenbrainzData {
     payload: Payload,
     scrobble: bool,
+    online: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -68,19 +82,61 @@ impl Default for AdditionalInfo {
     }
 }
 
-fn scrobble(listen_type: &'static str, payload: &Payload, token: &str) {
+fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
     let send = ListenbrainzSingleListen {
         listen_type,
         payload: [payload],
     };
     // println!("{}", serde_json::to_string_pretty(&send).unwrap());
-    let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
-        .set("Authorization", token)
-        .send_json(send)
-        .unwrap()
-        .status();
-    if status != 200 {
-        panic!("Scrobble failed: {}", status);
+    if online {
+        let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
+            .set("Authorization", USER_TOKEN)
+            .send_json(send)
+            .unwrap()
+            .status();
+        if status != 200 {
+            panic!("Scrobble failed: {}", status);
+        }
+    } else {
+        let cache_path = cache_path!();
+        if !cache_path.exists() {
+            std::fs::create_dir(cache_path).unwrap();
+        }
+        serde_json::to_writer(
+            BufWriter::new(
+                std::fs::File::create(format!("{}.json", payload.listened_at.unwrap())).unwrap(),
+            ),
+            &payload,
+        )
+        .unwrap();
+    }
+}
+
+fn import_cache() {
+    let cache_path = cache_path!();
+    if cache_path.exists() {
+        println!("Scrobbling unscrobbled music");
+        let mut request = br#"{"listen_type":"import","payload":["#.to_vec();
+        for i in std::fs::read_dir("cache_path").unwrap() {
+            std::io::copy(
+                &mut std::fs::File::open(i.unwrap().path()).unwrap(),
+                &mut request,
+            )
+            .unwrap();
+            request.push(b',');
+        }
+        request.pop();
+        request.extend_from_slice(b"]}");
+        std::fs::remove_dir_all(cache_path).unwrap();
+        let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
+            .set("Authorization", USER_TOKEN)
+            .set("Content-Type", "json")
+            .send_bytes(&request)
+            .unwrap()
+            .status();
+        if status != 200 {
+            panic!("Importing scrobbles failed: {}", status);
+        }
     }
 }
 
@@ -103,7 +159,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                         .unwrap()
                         .as_secs(),
                 );
-                scrobble("single", &data.payload, USER_TOKEN);
+                scrobble("single", &data.payload, data.online);
             }
             calloop::timer::TimeoutAction::Drop
         })
@@ -140,7 +196,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                                 .unwrap()
                                                 .as_secs(),
                                         );
-                                        scrobble("single", &data.payload, USER_TOKEN);
+                                        scrobble("single", &data.payload, data.online);
                                     }
                                     calloop::timer::TimeoutAction::Drop
                                 },
@@ -192,9 +248,9 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             && !data.payload.track_metadata.track_name.is_empty()
                             && !data.payload.track_metadata.release_name.is_empty();
 
-                        if data.scrobble {
+                        if data.scrobble && data.online {
                             data.payload.listened_at = None;
-                            scrobble("playing_now", &data.payload, USER_TOKEN);
+                            scrobble("playing_now", &data.payload, data.online);
                         }
                     }
                 }
@@ -203,9 +259,57 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
             }
         })
         .unwrap();
+
+    let mut data = ListenbrainzData::default();
+
+    data.online = {
+        let (system_connection, _sender): (calloop_dbus::DBusSource<()>, _) =
+            calloop_dbus::DBusSource::new_system().unwrap();
+        let connman_proxy =
+            system_connection.with_proxy("net.connman", "/", Duration::from_secs(5));
+        let properties = connman_proxy
+            .method_call("net.connman.Manager", "GetProperties", ())
+            .and_then(|r: (dbus::arg::PropMap,)| Ok(r.0))
+            .unwrap();
+        system_connection
+            .add_match::<connman::NetConnmanManagerPropertyChanged, _>(
+                MatchRule::new_signal("net.connman.Manager", "PropertyChanged"),
+                |_, _, _| true,
+            )
+            .unwrap();
+
+        handle
+            .insert_source(system_connection, |event, _metadata, data| {
+                if let Some(member) = event.member() {
+                    if &*member == "PropertyChanged" {
+                        let property: connman::NetConnmanManagerPropertyChanged =
+                            event.read_all().unwrap();
+                        if property.name == "State" {
+                            let val = property.value.0.as_str().unwrap();
+                            data.online = val == "ready" || val == "online";
+                            if data.online {
+                                import_cache();
+                            }
+                        }
+                    }
+                }
+                None
+            })
+            .unwrap();
+        let state = properties
+            .get("State")
+            .unwrap()
+            .0
+            .as_str()
+            .unwrap_or_default();
+        state == "ready" || state == "online"
+    };
     drop(handle);
-    event_loop
-        .run(None, &mut ListenbrainzData::default(), |_| {})
-        .unwrap();
+
+    if data.online {
+        import_cache();
+    }
+
+    event_loop.run(None, &mut data, |_| {}).unwrap();
     return 0;
 }

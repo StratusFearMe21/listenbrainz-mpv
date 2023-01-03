@@ -7,3 +7,5 @@ USER_TOKEN="Token <your token>"
 ```
 I made this for myself, and no one else. Don't expect any configurability or ease-of-use
 improvements any time soon
+
+This plugin also depends on `connman` being your network manager so that caching scrobbles offline works properly. Again, I made this for me, so don't expect this to change
