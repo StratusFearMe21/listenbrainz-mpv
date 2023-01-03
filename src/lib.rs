@@ -44,12 +44,12 @@ struct AdditionalInfo {
     media_player: &'static str,
     submission_client: &'static str,
     submission_client_version: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    release_mbid: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    release_mbid: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     artist_mbids: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recording_mbid: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    recording_mbid: String,
     duration_ms: u64,
 }
 
@@ -59,9 +59,9 @@ impl Default for AdditionalInfo {
             media_player: "mpv",
             submission_client: "mpv ListenBrainz Rust",
             submission_client_version: env!("CARGO_PKG_VERSION"),
-            release_mbid: None,
+            release_mbid: String::new(),
             artist_mbids: Vec::new(),
-            recording_mbid: None,
+            recording_mbid: String::new(),
             duration_ms: 0,
         }
     }
@@ -155,7 +155,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             match i.0 {
                                 "MUSICBRAINZ_ALBUMID" | "MusicBrainz Album Id" => {
                                     data.payload.track_metadata.additional_info.release_mbid =
-                                        Some(i.1.to_str().unwrap().to_string())
+                                        i.1.to_str().unwrap().to_string()
                                 }
                                 "MUSICBRAINZ_ARTISTID" | "MusicBrainz Artist Id" => {
                                     data.payload.track_metadata.additional_info.artist_mbids =
@@ -167,7 +167,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                 }
                                 "MUSICBRAINZ_TRACKID" => {
                                     data.payload.track_metadata.additional_info.recording_mbid =
-                                        Some(i.1.to_str().unwrap().to_string());
+                                        i.1.to_str().unwrap().to_string();
                                 }
                                 "ARTIST" | "artist" => {
                                     data.payload.track_metadata.artist_name =
