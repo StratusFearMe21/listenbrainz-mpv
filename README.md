@@ -11,7 +11,8 @@ improvements any time soon
 ## Features
 - *Now Playing* status on ListenBrainz
 - Scrobbles based on ListenBrainz guidelines (at 4 minutes, or when half the song as elapsed)
+- *Complete* scrobbles with as much metadata as possible (including MBIDs)
 - *utlra*lightweight
-  - Almost to a fault, because I didn't want to use an *async* runtime I used `calloop` which relies on Linux's/BSD's polling systems. This means that this is only compatible with Linux, but then again, C Plugins *only* work on Linux/BSD, so that doesn't really matter
-- When offline, it caches scrobbles and submits them *as soon* as your connection returns
+  - Almost to a fault, because I didn't want to use an async runtime, I used `calloop` which relies on Linux's/BSD's polling systems. This means that this plugin is only compatible with Linux, but then again, C Plugins *only* work on Linux/BSD, so that doesn't really matter
+- When offline, the plugin caches scrobbles and submits them *as soon* as your connection returns
   - This functionality is powered by `connman`'s dbus API, meaning that you must be using `connman` as your network manager to use this. Again, don't expect me to change this
