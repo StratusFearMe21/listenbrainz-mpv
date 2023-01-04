@@ -85,6 +85,12 @@ struct AdditionalInfo {
     duration_ms: u64,
 }
 
+#[derive(Serialize, Default, Debug)]
+struct LoveHate<'a> {
+    recording_mbid: &'a str,
+    score: i32,
+}
+
 impl Default for AdditionalInfo {
     fn default() -> Self {
         Self {
@@ -104,22 +110,21 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
         listen_type,
         payload: [payload],
     };
-    // println!("{}", serde_json::to_string_pretty(&send).unwrap());
     if online {
         let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
             .set("Authorization", USER_TOKEN)
-            .send_json(send)
-            .unwrap()
-            .status();
-        if status != 200 {
-            panic!("Scrobble failed: {}", status);
+            .send_json(send);
+        if status.is_ok() {
+            import_cache();
+            return;
         }
-    } else {
+    }
+    if let Some(listened_at) = payload.listened_at {
         let mut cache_path = cache_path!();
         if !cache_path.exists() {
             std::fs::create_dir(&cache_path).unwrap();
         }
-        cache_path.push(format!("{}.json", payload.listened_at.unwrap()));
+        cache_path.push(format!("{}.json", listened_at));
         serde_json::to_writer(
             BufWriter::new(std::fs::File::create(cache_path).unwrap()),
             &payload,
@@ -132,14 +137,13 @@ fn import_cache() {
     let cache_path = cache_path!();
     if cache_path.exists() && cache_path.read_dir().unwrap().next().is_some() {
         let mut request = br#"{"listen_type":"import","payload":["#.to_vec();
-        for i in std::fs::read_dir(cache_path).unwrap() {
+        for i in std::fs::read_dir(&cache_path).unwrap() {
             let path = i.unwrap().path();
             std::io::copy(
                 &mut std::fs::File::open(path.as_path()).unwrap(),
                 &mut request,
             )
             .unwrap();
-            std::fs::remove_file(path).unwrap();
             request.push(b',');
         }
         request.pop();
@@ -147,12 +151,14 @@ fn import_cache() {
         let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
             .set("Authorization", USER_TOKEN)
             .set("Content-Type", "json")
-            .send_bytes(&request)
-            .unwrap()
-            .status();
-        if status != 200 {
-            panic!("Importing scrobbles failed: {}", status);
+            .send_bytes(&request);
+        if status.is_err() {
+            return;
         }
+        std::fs::read_dir(cache_path)
+            .unwrap()
+            .try_for_each(|i| std::fs::remove_file(i?.path()))
+            .unwrap();
     }
 }
 
@@ -201,21 +207,71 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
         .insert_source(rx, move |_event, _metadata, data| loop {
             match mpv.event_context_mut().wait_event(0.0) {
                 Some(Ok(Event::Shutdown)) => signal.stop(),
+                Some(Ok(Event::ClientMessage(m))) => {
+                    if m[0] == "key-binding" {
+                        let score = match m[1] {
+                            "listenbrainz-love" => 1,
+                            "listenbrainz-hate" => -1,
+                            "listenbrainz-unrate" => 0,
+                            _ => continue,
+                        };
+
+                        if data
+                            .payload
+                            .track_metadata
+                            .additional_info
+                            .recording_mbid
+                            .is_empty()
+                        {
+                            eprintln!("This song is unknown to ListenBrainz, and cannot be rated");
+                        }
+
+                        let feedback = LoveHate {
+                            recording_mbid: &data
+                                .payload
+                                .track_metadata
+                                .additional_info
+                                .recording_mbid,
+                            score,
+                        };
+
+                        if !data.online {
+                            eprintln!("You must be online to submit feedback");
+                            continue;
+                        }
+
+                        let status = ureq::post(
+                            "https://api.listenbrainz.org/1/feedback/recording-feedback",
+                        )
+                        .set("Authorization", USER_TOKEN)
+                        .send_json(feedback);
+
+                        if status.is_err() {
+                            eprintln!("Error submitting feedback: {:?}", status);
+                        } else {
+                            eprintln!("Feedback submitted successfully");
+                        }
+                    }
+                }
                 Some(Ok(Event::PropertyChange { name, change, .. })) => {
                     if name == "pause" {
                         let PropertyData::Flag(paused) = change else {
                             unreachable!();
                         };
 
+                        if !data.scrobble {
+                            continue;
+                        }
+
                         if paused {
                             data.pause_instant = Instant::now();
                             rx_handle.remove(timer);
                         } else {
+                            data.scrobble_deadline =
+                                data.scrobble_deadline + data.pause_instant.elapsed();
                             timer = rx_handle
                                 .insert_source(
-                                    Timer::from_deadline(
-                                        data.scrobble_deadline + data.pause_instant.elapsed(),
-                                    ),
+                                    Timer::from_deadline(data.scrobble_deadline),
                                     timer_event,
                                 )
                                 .unwrap();
@@ -225,9 +281,9 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                 Some(Ok(Event::PlaybackRestart)) => {
                     let audio_pts: Result<i64, libmpv::Error> = mpv.get_property("audio-pts");
                     if audio_pts.is_err() || audio_pts.unwrap() < 1 {
-                        data.payload = Payload::default();
                         rx_handle.remove(timer);
                         let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
+
                         data.scrobble_deadline =
                             Instant::now() + Duration::from_secs(std::cmp::min(240, duration / 2));
                         data.payload.track_metadata.additional_info.duration_ms = duration * 1000;
@@ -237,7 +293,12 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                 timer_event,
                             )
                             .unwrap();
-
+                        data.payload.track_metadata.additional_info.release_mbid = String::new();
+                        data.payload.track_metadata.additional_info.artist_mbids = Vec::new();
+                        data.payload.track_metadata.additional_info.recording_mbid = String::new();
+                        data.payload.track_metadata.artist_name = String::new();
+                        data.payload.track_metadata.track_name = String::new();
+                        data.payload.track_metadata.release_name = String::new();
                         for i in mpv
                             .get_property::<libmpv::MpvNode>("metadata")
                             .unwrap()

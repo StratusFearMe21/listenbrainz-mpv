@@ -8,9 +8,17 @@ USER_TOKEN="Token <your token>"
 I made this for myself, and no one else. Don't expect any configurability or ease-of-use
 improvements any time soon
 
+You can also submit ListenBrainz feedback with this plugin using key bindings. For example, this is my `input.conf`
+```
+Ctrl+UP script-binding listenbrainz-love
+Ctrl+DOWN script-binding listenbrainz-hate
+Shift+Ctrl+DOWN script-binding listenbrainz-unrate
+```
+
 ## Features
 - *Now Playing* status on ListenBrainz
 - Scrobbles based on ListenBrainz guidelines (at 4 minutes, or when half the song as elapsed)
+- Allow for loving, hating, or removing feedback on a song
 - *Complete* scrobbles with as much metadata as possible (including MBIDs)
 - *utlra*lightweight
   - Because I didn't want to use an async runtime, I used `calloop` which relies on Linux's/BSD's polling systems. This means that this plugin is only compatible with Linux, but then again, C Plugins *only* work on Linux/BSD, so that doesn't really matter
