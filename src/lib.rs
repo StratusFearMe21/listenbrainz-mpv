@@ -178,7 +178,10 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
     let timer = Timer::from_duration(Duration::from_secs(31_536_000));
     let mut timer = handle
         .insert_source(timer, |_event, _metadata, _data| {
-            panic!("Something has gone horibbly wrong, somehow, mpv has been loading for an entire year!");
+            panic!(
+                "Something has gone horibbly wrong, somehow, mpv has been loading for an entire \
+                 year!"
+            );
         })
         .unwrap();
     let (tx, rx): (Sender<()>, Channel<()>) = calloop::channel::channel();
@@ -226,7 +229,10 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             .recording_mbid
                             .is_empty()
                         {
-                            eprintln!("This song is unknown to ListenBrainz or has IDv3 tags, and cannot be rated");
+                            eprintln!(
+                                "This song is unknown to ListenBrainz or has IDv3 tags, and \
+                                 cannot be rated"
+                            );
                         }
 
                         let feedback = LoveHate {
@@ -327,19 +333,26 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                         i.1.to_str().unwrap().to_string()
                                 }
                                 "MUSICBRAINZ_ARTISTID" | "MusicBrainz Artist Id" => {
-                                    data.payload.track_metadata.additional_info.artist_mbids = if data.payload.track_metadata.additional_info.recording_mbid.is_empty() {
-                                        i.1.to_str()
-                                            .unwrap()
-                                            .split("/")
-                                            .map(|f| f.trim().to_string())
-                                            .collect()
-                                    } else {
-                                        i.1.to_str()
-                                            .unwrap()
-                                            .split(";")
-                                            .map(|f| f.trim().to_string())
-                                            .collect()
-                                    };
+                                    data.payload.track_metadata.additional_info.artist_mbids =
+                                        if data
+                                            .payload
+                                            .track_metadata
+                                            .additional_info
+                                            .recording_mbid
+                                            .is_empty()
+                                        {
+                                            i.1.to_str()
+                                                .unwrap()
+                                                .split("/")
+                                                .map(|f| f.trim().to_string())
+                                                .collect()
+                                        } else {
+                                            i.1.to_str()
+                                                .unwrap()
+                                                .split(";")
+                                                .map(|f| f.trim().to_string())
+                                                .collect()
+                                        };
                                 }
                                 "MUSICBRAINZ_TRACKID" => {
                                     data.payload.track_metadata.additional_info.recording_mbid =
