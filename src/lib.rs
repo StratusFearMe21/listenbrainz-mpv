@@ -200,6 +200,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
             );
             scrobble("single", &data.payload, data.online);
         }
+        data.scrobble = false;
         calloop::timer::TimeoutAction::Drop
     }
 
@@ -278,8 +279,24 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                         }
                     }
                 }
-                Some(Ok(Event::PlaybackRestart)) => {
+                Some(Ok(Event::Seek)) => {
+                    if mpv.get_property::<i64>("time-pos").unwrap() == 0 {
+                        rx_handle.remove(timer);
+                        let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
+                        data.scrobble_deadline =
+                            Instant::now() + Duration::from_secs(std::cmp::min(240, duration / 2));
+                        data.payload.track_metadata.additional_info.duration_ms = duration * 1000;
+                        timer = rx_handle
+                            .insert_source(
+                                Timer::from_deadline(data.scrobble_deadline),
+                                timer_event,
+                            )
+                            .unwrap();
+                    }
+                }
+                Some(Ok(Event::FileLoaded)) => {
                     let audio_pts: Result<i64, libmpv::Error> = mpv.get_property("audio-pts");
+                    println!("playback restart");
                     if audio_pts.is_err() || audio_pts.unwrap() < 1 {
                         rx_handle.remove(timer);
                         let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
