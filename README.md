@@ -16,6 +16,7 @@ Shift+Ctrl+DOWN script-binding listenbrainz-unrate
 ```
 
 ## Features
+
 - *Now Playing* status on ListenBrainz
 - Scrobbles based on ListenBrainz guidelines (at 4 minutes, or when half the song as elapsed)
 - Allow for loving, hating, or removing feedback on a song
@@ -26,9 +27,12 @@ Shift+Ctrl+DOWN script-binding listenbrainz-unrate
   - This functionality is powered by `connman`'s dbus API, meaning that you must be using `connman` as your network manager to use this. Again, don't expect me to change this
 
 ## If you use this for nothing else, use this plugin as a template.
+
 I made this plugin with the goal of being intensly lightweight with almost zero runtime overhead¸ my goals for this project were
+
 - No spawning threads (mpv already spawns a lot)
   - By proxy, no async runtime
 - No polling anything, even mpv's events
 - Ideally, as little allocation as possible
+
 This was extremely hard to acheive and it took me a *long* time to figure out how to do all that. So if noting else, use this crate as a template for *your own* mpv plugin!
