@@ -110,6 +110,8 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
         listen_type,
         payload: [payload],
     };
+    #[cfg(debug_assertions)]
+    eprintln!("{}", serde_json::to_string_pretty(&send).unwrap());
     if online {
         let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
             .set("Authorization", USER_TOKEN)
@@ -224,7 +226,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             .recording_mbid
                             .is_empty()
                         {
-                            eprintln!("This song is unknown to ListenBrainz, and cannot be rated");
+                            eprintln!("This song is unknown to ListenBrainz or has IDv3 tags, and cannot be rated");
                         }
 
                         let feedback = LoveHate {
@@ -317,18 +319,27 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             .to_map()
                             .unwrap()
                         {
+                            #[cfg(debug_assertions)]
+                            dbg!(i.0);
                             match i.0 {
                                 "MUSICBRAINZ_ALBUMID" | "MusicBrainz Album Id" => {
                                     data.payload.track_metadata.additional_info.release_mbid =
                                         i.1.to_str().unwrap().to_string()
                                 }
                                 "MUSICBRAINZ_ARTISTID" | "MusicBrainz Artist Id" => {
-                                    data.payload.track_metadata.additional_info.artist_mbids =
+                                    data.payload.track_metadata.additional_info.artist_mbids = if data.payload.track_metadata.additional_info.recording_mbid.is_empty() {
+                                        i.1.to_str()
+                                            .unwrap()
+                                            .split("/")
+                                            .map(|f| f.trim().to_string())
+                                            .collect()
+                                    } else {
                                         i.1.to_str()
                                             .unwrap()
                                             .split(";")
                                             .map(|f| f.trim().to_string())
-                                            .collect();
+                                            .collect()
+                                    };
                                 }
                                 "MUSICBRAINZ_TRACKID" => {
                                     data.payload.track_metadata.additional_info.recording_mbid =
@@ -350,6 +361,24 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             }
                         }
 
+                        #[cfg(debug_assertions)]
+                        {
+                            dbg!(
+                                *mpv.get_property::<MpvStr>("filename").unwrap()
+                                    != data.payload.track_metadata.track_name
+                            );
+                            dbg!(!data.payload.track_metadata.artist_name.is_empty());
+                            dbg!(!data.payload.track_metadata.track_name.is_empty());
+                            dbg!(!data.payload.track_metadata.release_name.is_empty());
+                            #[cfg(feature = "only-scrobble-if-mbid")]
+                            dbg!(!data
+                                .payload
+                                .track_metadata
+                                .additional_info
+                                .release_mbid
+                                .is_empty());
+                        }
+
                         data.scrobble = (*mpv.get_property::<MpvStr>("filename").unwrap()
                             != data.payload.track_metadata.track_name)
                             && !data.payload.track_metadata.artist_name.is_empty()
@@ -363,7 +392,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                     .payload
                                     .track_metadata
                                     .additional_info
-                                    .recording_mbid
+                                    .release_mbid
                                     .is_empty();
                         }
 

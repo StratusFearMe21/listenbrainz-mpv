@@ -26,6 +26,7 @@ Shift+Ctrl+DOWN script-binding listenbrainz-unrate
 - Scrobbles based on ListenBrainz guidelines (at 4 minutes, or when half the song as elapsed)
 - Allow for loving, hating, or removing feedback on a song
 - *Complete* scrobbles with as much metadata as possible (including MBIDs)
+  - This plugin assumes that you've used MusicBrainz Picard to tag your music, this plugin may break if this is untrue
 - *utlra*lightweight
   - Because I didn't want to use an async runtime, I used `calloop` which relies on Linux's/BSD's polling systems. This means that this plugin is only compatible with Linux, but then again, C Plugins *only* work on Linux/BSD, so that doesn't really matter
 - When offline, the plugin caches scrobbles and submits them *as soon* as your connection returns
