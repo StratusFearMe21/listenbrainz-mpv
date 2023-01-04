@@ -8,6 +8,11 @@ USER_TOKEN="Token <your token>"
 I made this for myself, and no one else. Don't expect any configurability or ease-of-use
 improvements any time soon
 
+By default, this plugin won't scrobble unless the track contains a MusicBrainz Recording MBID. To change this, compile with no default features
+```sh
+cargo build --release --no-default-features
+```
+
 You can also submit ListenBrainz feedback with this plugin using key bindings. For example, this is my `input.conf`
 ```
 Ctrl+UP script-binding listenbrainz-love

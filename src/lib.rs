@@ -255,14 +255,10 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                     }
                 }
                 Some(Ok(Event::PropertyChange { name, change, .. })) => {
-                    if name == "pause" {
+                    if name == "pause" && data.scrobble {
                         let PropertyData::Flag(paused) = change else {
                             unreachable!();
                         };
-
-                        if !data.scrobble {
-                            continue;
-                        }
 
                         if paused {
                             data.pause_instant = Instant::now();
@@ -296,7 +292,6 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                 }
                 Some(Ok(Event::FileLoaded)) => {
                     let audio_pts: Result<i64, libmpv::Error> = mpv.get_property("audio-pts");
-                    println!("playback restart");
                     if audio_pts.is_err() || audio_pts.unwrap() < 1 {
                         rx_handle.remove(timer);
                         let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
@@ -360,6 +355,17 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             && !data.payload.track_metadata.artist_name.is_empty()
                             && !data.payload.track_metadata.track_name.is_empty()
                             && !data.payload.track_metadata.release_name.is_empty();
+
+                        #[cfg(feature = "only-scrobble-if-mbid")]
+                        {
+                            data.scrobble = data.scrobble
+                                && !data
+                                    .payload
+                                    .track_metadata
+                                    .additional_info
+                                    .recording_mbid
+                                    .is_empty();
+                        }
 
                         if data.scrobble && data.online {
                             data.payload.listened_at = None;
