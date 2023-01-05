@@ -137,8 +137,15 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
 
 fn import_cache() {
     let cache_path = cache_path!();
-    if cache_path.exists() && cache_path.read_dir().unwrap().next().is_some() {
-        let mut request = br#"{"listen_type":"import","payload":["#.to_vec();
+    let mut read_dir = cache_path.read_dir().unwrap();
+    let is_occupied = read_dir.next().is_some();
+    let is_one_file = read_dir.next().is_none();
+    if cache_path.exists() && is_occupied {
+        let mut request = if is_one_file {
+            br#"{"listen_type":"import","single":["#.to_vec()
+        } else {
+            br#"{"listen_type":"import","payload":["#.to_vec()
+        };
         for i in std::fs::read_dir(&cache_path).unwrap() {
             let path = i.unwrap().path();
             std::io::copy(
@@ -150,11 +157,14 @@ fn import_cache() {
         }
         request.pop();
         request.extend_from_slice(b"]}");
+        #[cfg(debug_assertions)]
+        eprintln!("{}", unsafe { std::str::from_utf8_unchecked(&request) });
         let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
             .set("Authorization", USER_TOKEN)
             .set("Content-Type", "json")
             .send_bytes(&request);
         if status.is_err() {
+            eprintln!("Error importing {:?}", status);
             return;
         }
         std::fs::read_dir(cache_path)
@@ -333,14 +343,13 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                         i.1.to_str().unwrap().to_string()
                                 }
                                 "MUSICBRAINZ_ARTISTID" | "MusicBrainz Artist Id" => {
+                                    let artists = i.1.to_str().unwrap();
+
+                                    #[cfg(debug_assertions)]
+                                    dbg!(artists);
+
                                     data.payload.track_metadata.additional_info.artist_mbids =
-                                        if data
-                                            .payload
-                                            .track_metadata
-                                            .additional_info
-                                            .recording_mbid
-                                            .is_empty()
-                                        {
+                                        if memchr::memchr(b';', artists.as_bytes()).is_some() {
                                             i.1.to_str()
                                                 .unwrap()
                                                 .split("/")

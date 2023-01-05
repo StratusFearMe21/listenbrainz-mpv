@@ -16,6 +16,7 @@ dirs = "4.0.0"
 dotenvy_macro = "0.15.1"
 libmpv = { git = "https://github.com/StratusFearMe21/libmpv-rs", version = "2.0.1", default-features = false, features = ["plugin"] }
 libmpv-sys = { git = "https://github.com/StratusFearMe21/libmpv-rs", version = "3.1.0", default-features = false }
+memchr = "2.5.0"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.91"
 ureq = { version = "2.6.0", features = ["json", "tls"], default-features = false }
