@@ -10,7 +10,9 @@ use calloop::{
     timer::Timer,
     EventLoop,
 };
+#[cfg(target_os = "linux")]
 use dbus::message::MatchRule;
+use dotenvy_macro::dotenv;
 use libmpv::{
     events::{Event, PropertyData},
     Mpv, MpvStr,
@@ -18,10 +20,19 @@ use libmpv::{
 use libmpv_sys::mpv_handle;
 use serde::Serialize;
 
+#[cfg(target_os = "linux")]
 mod connman;
 
+#[cfg(target_os = "android")]
 macro_rules! cache_path {
     () => {
+        std::path::Path::new(dotenv!("ANDROID_SDCARD_DIR")).join("listenbrainz")
+    };
+}
+
+#[cfg(target_os = "linux")]
+macro_rules! cache_path {
+    () => {password
         dirs::home_dir()
             .unwrap()
             .join(dirs::cache_dir().unwrap())
@@ -117,10 +128,12 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
             .set("Authorization", USER_TOKEN)
             .send_json(send);
         if status.is_ok() {
+            #[cfg(feature = "caching")]
             import_cache();
             return;
         }
     }
+    #[cfg(feature = "caching")]
     if let Some(listened_at) = payload.listened_at {
         let mut cache_path = cache_path!();
         if !cache_path.exists() {
@@ -135,6 +148,7 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
     }
 }
 
+#[cfg(feature = "caching")]
 fn import_cache() {
     let cache_path = cache_path!();
     let mut read_dir = cache_path.read_dir().unwrap();
@@ -142,7 +156,7 @@ fn import_cache() {
     let is_one_file = read_dir.next().is_none();
     if cache_path.exists() && is_occupied {
         let mut request = if is_one_file {
-            br#"{"listen_type":"import","single":["#.to_vec()
+            br#"{"listen_type":"single","payload":["#.to_vec()
         } else {
             br#"{"listen_type":"import","payload":["#.to_vec()
         };
@@ -174,7 +188,6 @@ fn import_cache() {
     }
 }
 
-use dotenvy_macro::dotenv;
 const USER_TOKEN: &str = dotenv!("USER_TOKEN");
 
 #[no_mangle]
@@ -312,17 +325,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                     let audio_pts: Result<i64, libmpv::Error> = mpv.get_property("audio-pts");
                     if audio_pts.is_err() || audio_pts.unwrap() < 1 {
                         rx_handle.remove(timer);
-                        let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
 
-                        data.scrobble_deadline =
-                            Instant::now() + Duration::from_secs(std::cmp::min(240, duration / 2));
-                        data.payload.track_metadata.additional_info.duration_ms = duration * 1000;
-                        timer = rx_handle
-                            .insert_source(
-                                Timer::from_deadline(data.scrobble_deadline),
-                                timer_event,
-                            )
-                            .unwrap();
                         data.payload.track_metadata.additional_info.release_mbid = String::new();
                         data.payload.track_metadata.additional_info.artist_mbids = Vec::new();
                         data.payload.track_metadata.additional_info.recording_mbid = String::new();
@@ -352,13 +355,13 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                         if memchr::memchr(b';', artists.as_bytes()).is_some() {
                                             i.1.to_str()
                                                 .unwrap()
-                                                .split("/")
+                                                .split(";")
                                                 .map(|f| f.trim().to_string())
                                                 .collect()
                                         } else {
                                             i.1.to_str()
                                                 .unwrap()
-                                                .split(";")
+                                                .split("/")
                                                 .map(|f| f.trim().to_string())
                                                 .collect()
                                         };
@@ -418,9 +421,24 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                     .is_empty();
                         }
 
-                        if data.scrobble && data.online {
-                            data.payload.listened_at = None;
-                            scrobble("playing_now", &data.payload, data.online);
+                        if data.scrobble {
+                            let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
+
+                            data.scrobble_deadline = Instant::now()
+                                + Duration::from_secs(std::cmp::min(240, duration / 2));
+                            data.payload.track_metadata.additional_info.duration_ms =
+                                duration * 1000;
+                            timer = rx_handle
+                                .insert_source(
+                                    Timer::from_deadline(data.scrobble_deadline),
+                                    timer_event,
+                                )
+                                .unwrap();
+
+                            if data.online {
+                                data.payload.listened_at = None;
+                                scrobble("playing_now", &data.payload, data.online);
+                            }
                         }
                     }
                 }
@@ -432,55 +450,61 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
 
     let mut data = ListenbrainzData::default();
 
-    data.online = {
-        let (system_connection, _sender): (calloop_dbus::DBusSource<()>, _) =
-            calloop_dbus::DBusSource::new_system().unwrap();
-        let connman_proxy =
-            system_connection.with_proxy("net.connman", "/", Duration::from_secs(5));
-        let properties = connman_proxy
-            .method_call("net.connman.Manager", "GetProperties", ())
-            .and_then(|r: (dbus::arg::PropMap,)| Ok(r.0))
-            .unwrap();
-        system_connection
-            .add_match::<connman::NetConnmanManagerPropertyChanged, _>(
-                MatchRule::new_signal("net.connman.Manager", "PropertyChanged"),
-                |_, _, _| true,
-            )
-            .unwrap();
+    data.online = true;
 
-        let state = properties
-            .get("State")
-            .unwrap()
-            .0
-            .as_str()
-            .unwrap_or_default();
+    #[cfg(all(target_os = "linux", feature = "caching"))]
+    {
+        data.online = {
+            let (system_connection, _sender): (calloop_dbus::DBusSource<()>, _) =
+                calloop_dbus::DBusSource::new_system().unwrap();
+            let connman_proxy =
+                system_connection.with_proxy("net.connman", "/", Duration::from_secs(5));
+            let properties = connman_proxy
+                .method_call("net.connman.Manager", "GetProperties", ())
+                .and_then(|r: (dbus::arg::PropMap,)| Ok(r.0))
+                .unwrap();
+            system_connection
+                .add_match::<connman::NetConnmanManagerPropertyChanged, _>(
+                    MatchRule::new_signal("net.connman.Manager", "PropertyChanged"),
+                    |_, _, _| true,
+                )
+                .unwrap();
 
-        handle
-            .insert_source(system_connection, |event, _metadata, data| {
-                if let Some(member) = event.member() {
-                    if &*member == "PropertyChanged" {
-                        let property: connman::NetConnmanManagerPropertyChanged =
-                            event.read_all().unwrap();
-                        if property.name == "State" {
-                            let val = property.value.0.as_str().unwrap();
-                            data.online = val == "ready" || val == "online";
-                            if data.online {
-                                import_cache();
-                                if data.scrobble {
-                                    data.payload.listened_at = None;
-                                    scrobble("playing_now", &data.payload, data.online);
+            let state = properties
+                .get("State")
+                .unwrap()
+                .0
+                .as_str()
+                .unwrap_or_default();
+
+            handle
+                .insert_source(system_connection, |event, _metadata, data| {
+                    if let Some(member) = event.member() {
+                        if &*member == "PropertyChanged" {
+                            let property: connman::NetConnmanManagerPropertyChanged =
+                                event.read_all().unwrap();
+                            if property.name == "State" {
+                                let val = property.value.0.as_str().unwrap();
+                                data.online = val == "ready" || val == "online";
+                                if data.online {
+                                    import_cache();
+                                    if data.scrobble {
+                                        data.payload.listened_at = None;
+                                        scrobble("playing_now", &data.payload, data.online);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                None
-            })
-            .unwrap();
-        state == "ready" || state == "online"
-    };
+                    None
+                })
+                .unwrap();
+            state == "ready" || state == "online"
+        };
+    }
     drop(handle);
 
+    #[cfg(feature = "caching")]
     if data.online {
         import_cache();
     }

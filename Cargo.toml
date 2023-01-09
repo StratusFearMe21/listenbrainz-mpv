@@ -10,23 +10,26 @@ crate-type = ["cdylib"]
 
 [dependencies]
 calloop = "0.10.5"
-calloop-dbus = { version = "0.1.1", git = "https://github.com/StratusFearMe21/calloop-dbus" }
-dbus = "0.9.6"
 dirs = "4.0.0"
 dotenvy_macro = "0.15.1"
-libmpv = { git = "https://github.com/StratusFearMe21/libmpv-rs", version = "2.0.1", default-features = false, features = ["plugin"] }
+libmpv = { git = "https://github.com/StratusFearMe21/libmpv-rs", version = "2.0.1", default-features = false }
 libmpv-sys = { git = "https://github.com/StratusFearMe21/libmpv-rs", version = "3.1.0", default-features = false }
 memchr = "2.5.0"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.91"
 ureq = { version = "2.6.0", features = ["json", "tls"], default-features = false }
 
+[target.x86_64-unknown-linux-gnu.dependencies]
+dbus = { version = "0.9.6", optional = true }
+calloop-dbus = { version = "0.1.1", git = "https://github.com/StratusFearMe21/calloop-dbus", optional = true }
+
+
 [profile.release]
 lto = true
 strip = true
 codegen-units = 1
-panic = "abort"
 
 [features]
-default = ["only-scrobble-if-mbid"]
+default = ["only-scrobble-if-mbid", "caching"]
 only-scrobble-if-mbid = []
+caching = ["dbus", "calloop-dbus"]
