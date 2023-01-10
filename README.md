@@ -1,12 +1,6 @@
 # Listenbrainz MPV
 This is an MPV C-Plugin that scrobbles your music to ListenBrainz!
 
-To compile, make a `.env` file with this content
-```sh
-USER_TOKEN="Token <your token>"
-```
-I made this for myself, and no one else. Don't expect any configurability or ease-of-use
-improvements any time soon
 
 By default, this plugin won't scrobble unless the track contains a MusicBrainz Recording MBID. To change this, compile with no default features
 ```sh
@@ -20,6 +14,13 @@ Ctrl+DOWN script-binding listenbrainz-hate
 Shift+Ctrl+DOWN script-binding listenbrainz-unrate
 ```
 
+## Configuration
+
+You must configure this plugin via the `script-opts` option in `mpv.conf`, this is an example
+```
+script-opts=listenbrainz-user-token={YOUR_USER_TOKEN},listenbrainz-cache-path=.cache
+```
+
 ## Features
 
 - *Now Playing* status on ListenBrainz
@@ -31,6 +32,7 @@ Shift+Ctrl+DOWN script-binding listenbrainz-unrate
   - Because I didn't want to use an async runtime, I used `calloop` which relies on Linux's/BSD's polling systems. This means that this plugin is only compatible with Linux, but then again, C Plugins *only* work on Linux/BSD, so that doesn't really matter
 - When offline, the plugin caches scrobbles and submits them *as soon* as your connection returns
   - This functionality is powered by `connman`'s dbus API, meaning that you must be using `connman` as your network manager to use this. Again, don't expect me to change this
+  - On Android, this does not apply
 
 ## Android
 
@@ -40,7 +42,6 @@ However, this plugin has specific requirements
 - If you want offline caching
   - You must use MPV via the *"File Picker (Legacy)"*
   - You must install the api29 build
-  - You must specify `ANDROID_SDCARD_DIR` in the `.env` file. For most people this can be set to `/storage/emulated/0`
 - If you don't need offline caching
   - You must compile with `--no-default-features` to turn the `caching` feature off
 
@@ -55,6 +56,8 @@ For 64-bit build
 ```sh
 CC=$NDK_TOOLCHAIN/bin/aarch64-linux-android29-clang AR=$NDK_TOOLCHAIN/bin/llvm-ar cargo +nightly build --release -Zbuild-std --target="aarch64-linux-android"
 ```
+
+If the plugin crashes `mpv-android`, try setting `listenbrainz-cache-path` to the path to your SD card.
 
 ## If you use this for nothing else, use this plugin as a template.
 

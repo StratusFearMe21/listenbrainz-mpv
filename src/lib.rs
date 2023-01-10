@@ -2,6 +2,7 @@ use std::{
     io::BufWriter,
     mem::ManuallyDrop,
     num::NonZeroU64,
+    path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -12,7 +13,6 @@ use calloop::{
 };
 #[cfg(target_os = "linux")]
 use dbus::message::MatchRule;
-use dotenvy_macro::dotenv;
 use libmpv::{
     events::{Event, PropertyData},
     Mpv, MpvStr,
@@ -23,27 +23,12 @@ use serde::Serialize;
 #[cfg(target_os = "linux")]
 mod connman;
 
-#[cfg(target_os = "android")]
-macro_rules! cache_path {
-    () => {
-        std::path::Path::new(dotenv!("ANDROID_SDCARD_DIR")).join("listenbrainz")
-    };
-}
-
-#[cfg(target_os = "linux")]
-macro_rules! cache_path {
-    () => {password
-        dirs::home_dir()
-            .unwrap()
-            .join(dirs::cache_dir().unwrap())
-            .join("listenbrainz")
-    };
-}
-
 #[derive(Debug)]
 struct ListenbrainzData {
     payload: Payload,
     scrobble: bool,
+    token: String,
+    cache_path: PathBuf,
     online: bool,
     scrobble_deadline: Instant,
     pause_instant: Instant,
@@ -54,6 +39,8 @@ impl Default for ListenbrainzData {
         Self {
             payload: Payload::default(),
             scrobble: false,
+            token: String::new(),
+            cache_path: PathBuf::new(),
             online: false,
             scrobble_deadline: Instant::now(),
             pause_instant: Instant::now(),
@@ -116,7 +103,13 @@ impl Default for AdditionalInfo {
     }
 }
 
-fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
+fn scrobble(
+    listen_type: &'static str,
+    payload: &Payload,
+    online: bool,
+    token: &str,
+    cache_path: &Path,
+) {
     let send = ListenbrainzSingleListen {
         listen_type,
         payload: [payload],
@@ -125,23 +118,23 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
     eprintln!("{}", serde_json::to_string_pretty(&send).unwrap());
     if online {
         let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
-            .set("Authorization", USER_TOKEN)
+            .set("Authorization", token)
             .send_json(send);
         if status.is_ok() {
             #[cfg(feature = "caching")]
-            import_cache();
+            import_cache(token, cache_path);
             return;
         }
     }
     #[cfg(feature = "caching")]
     if let Some(listened_at) = payload.listened_at {
-        let mut cache_path = cache_path!();
         if !cache_path.exists() {
             std::fs::create_dir(&cache_path).unwrap();
         }
-        cache_path.push(format!("{}.json", listened_at));
         serde_json::to_writer(
-            BufWriter::new(std::fs::File::create(cache_path).unwrap()),
+            BufWriter::new(
+                std::fs::File::create(cache_path.join(format!("{}.json", listened_at))).unwrap(),
+            ),
             &payload,
         )
         .unwrap();
@@ -149,8 +142,7 @@ fn scrobble(listen_type: &'static str, payload: &Payload, online: bool) {
 }
 
 #[cfg(feature = "caching")]
-fn import_cache() {
-    let cache_path = cache_path!();
+fn import_cache(token: &str, cache_path: &Path) {
     let mut read_dir = cache_path.read_dir().unwrap();
     let is_occupied = read_dir.next().is_some();
     let is_one_file = read_dir.next().is_none();
@@ -174,7 +166,7 @@ fn import_cache() {
         #[cfg(debug_assertions)]
         eprintln!("{}", unsafe { std::str::from_utf8_unchecked(&request) });
         let status = ureq::post("https://api.listenbrainz.org/1/submit-listens")
-            .set("Authorization", USER_TOKEN)
+            .set("Authorization", token)
             .set("Content-Type", "json")
             .send_bytes(&request);
         if status.is_err() {
@@ -187,8 +179,6 @@ fn import_cache() {
             .unwrap();
     }
 }
-
-const USER_TOKEN: &str = dotenv!("USER_TOKEN");
 
 #[no_mangle]
 pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
@@ -226,10 +216,43 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                     .unwrap()
                     .as_secs(),
             );
-            scrobble("single", &data.payload, data.online);
+            scrobble(
+                "single",
+                &data.payload,
+                data.online,
+                &data.token,
+                &data.cache_path,
+            );
         }
         data.scrobble = false;
         calloop::timer::TimeoutAction::Drop
+    }
+
+    let mut data = ListenbrainzData::default();
+
+    for i in mpv
+        .get_property::<libmpv::MpvNode>("script-opts")
+        .unwrap()
+        .to_map()
+        .unwrap()
+    {
+        match i.0 {
+            "listenbrainz-user-token" => data.token = format!("Token {}", i.1.to_str().unwrap()),
+            "listenbrainz-cache-path" => {
+                #[cfg(target_os = "linux")]
+                {
+                    data.cache_path = dirs::home_dir()
+                        .unwrap()
+                        .join(i.1.to_str().unwrap())
+                        .join("listenbrainz");
+                }
+                #[cfg(target_os = "android")]
+                {
+                    data.cache_path = Path::new(i.1.to_str().unwrap()).join("listenbrainz");
+                }
+            }
+            _ => {}
+        }
     }
 
     handle
@@ -275,7 +298,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                         let status = ureq::post(
                             "https://api.listenbrainz.org/1/feedback/recording-feedback",
                         )
-                        .set("Authorization", USER_TOKEN)
+                        .set("Authorization", &data.token)
                         .send_json(feedback);
 
                         if status.is_err() {
@@ -437,7 +460,13 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
 
                             if data.online {
                                 data.payload.listened_at = None;
-                                scrobble("playing_now", &data.payload, data.online);
+                                scrobble(
+                                    "playing_now",
+                                    &data.payload,
+                                    data.online,
+                                    &data.token,
+                                    &data.cache_path,
+                                );
                             }
                         }
                     }
@@ -448,7 +477,16 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
         })
         .unwrap();
 
-    let mut data = ListenbrainzData::default();
+    if data.cache_path == PathBuf::new() {
+        #[cfg(target_os = "linux")]
+        {
+            data.cache_path = dirs::cache_dir().unwrap().join("listenbrainz");
+        }
+        #[cfg(target_os = "android")]
+        {
+            data.cache_path = Path::new("/storage/emulated/0").join("listenbrainz");
+        }
+    }
 
     data.online = true;
 
@@ -487,10 +525,16 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                 let val = property.value.0.as_str().unwrap();
                                 data.online = val == "ready" || val == "online";
                                 if data.online {
-                                    import_cache();
+                                    import_cache(&data.token, &data.cache_path);
                                     if data.scrobble {
                                         data.payload.listened_at = None;
-                                        scrobble("playing_now", &data.payload, data.online);
+                                        scrobble(
+                                            "playing_now",
+                                            &data.payload,
+                                            data.online,
+                                            &data.token,
+                                            &data.cache_path,
+                                        );
                                     }
                                 }
                             }
@@ -506,7 +550,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
 
     #[cfg(feature = "caching")]
     if data.online {
-        import_cache();
+        import_cache(&data.token, &data.cache_path);
     }
 
     event_loop.run(None, &mut data, |_| {}).unwrap();

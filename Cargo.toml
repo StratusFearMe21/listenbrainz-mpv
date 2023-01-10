@@ -11,7 +11,6 @@ crate-type = ["cdylib"]
 [dependencies]
 calloop = "0.10.5"
 dirs = "4.0.0"
-dotenvy_macro = "0.15.1"
 libmpv = { git = "https://github.com/StratusFearMe21/libmpv-rs", version = "2.0.1", default-features = false }
 libmpv-sys = { git = "https://github.com/StratusFearMe21/libmpv-rs", version = "3.1.0", default-features = false }
 memchr = "2.5.0"
