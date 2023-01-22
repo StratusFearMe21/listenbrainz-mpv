@@ -186,6 +186,9 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
     mpv.event_context()
         .observe_property("pause", libmpv::Format::Flag, 0)
         .unwrap();
+    mpv.event_context()
+        .observe_property("speed", libmpv::Format::Double, 0)
+        .unwrap();
     let mut event_loop = EventLoop::<ListenbrainzData>::try_new().unwrap();
     let handle = event_loop.handle();
     let timer = Timer::from_duration(Duration::from_secs(31_536_000));
@@ -327,15 +330,37 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                 )
                                 .unwrap();
                         }
+                    } else if name == "speed" && data.scrobble {
+                        let PropertyData::Double(speed) = change else {
+                            unreachable!();
+                        };
+
+                        let duration = mpv.get_property::<f64>("duration").unwrap();
+                        let pos = mpv.get_property::<f64>("time-pos").unwrap();
+                        data.scrobble_deadline = Instant::now()
+                            + Duration::from_secs_f64(
+                                (f64::min(240.0, duration / 2.0) / speed) - pos,
+                            );
+                        data.payload.track_metadata.additional_info.duration_ms =
+                            (duration * 1000.0) as u64;
+                        timer = rx_handle
+                            .insert_source(
+                                Timer::from_deadline(data.scrobble_deadline),
+                                timer_event,
+                            )
+                            .unwrap();
                     }
                 }
                 Some(Ok(Event::Seek)) => {
                     if mpv.get_property::<i64>("time-pos").unwrap() == 0 {
                         rx_handle.remove(timer);
-                        let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
-                        data.scrobble_deadline =
-                            Instant::now() + Duration::from_secs(std::cmp::min(240, duration / 2));
-                        data.payload.track_metadata.additional_info.duration_ms = duration * 1000;
+                        let duration = mpv.get_property::<f64>("duration").unwrap();
+                        let speed = mpv.get_property::<f64>("speed").unwrap();
+
+                        data.scrobble_deadline = Instant::now()
+                            + Duration::from_secs_f64(f64::min(240.0, duration / 2.0) / speed);
+                        data.payload.track_metadata.additional_info.duration_ms =
+                            (duration * 1000.0) as u64;
                         timer = rx_handle
                             .insert_source(
                                 Timer::from_deadline(data.scrobble_deadline),
@@ -445,12 +470,13 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                         }
 
                         if data.scrobble {
-                            let duration = mpv.get_property::<i64>("duration").unwrap() as u64;
+                            let duration = mpv.get_property::<f64>("duration").unwrap();
+                            let speed = mpv.get_property::<f64>("speed").unwrap();
 
                             data.scrobble_deadline = Instant::now()
-                                + Duration::from_secs(std::cmp::min(240, duration / 2));
+                                + Duration::from_secs_f64(f64::min(240.0, duration / 2.0) / speed);
                             data.payload.track_metadata.additional_info.duration_ms =
-                                duration * 1000;
+                                (duration * 1000.0) as u64;
                             timer = rx_handle
                                 .insert_source(
                                     Timer::from_deadline(data.scrobble_deadline),
