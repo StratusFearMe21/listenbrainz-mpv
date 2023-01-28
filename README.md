@@ -31,7 +31,7 @@ script-opts=listenbrainz-user-token={YOUR_USER_TOKEN},listenbrainz-cache-path=.c
 - *utlra*lightweight
   - Because I didn't want to use an async runtime, I used `calloop` which relies on Linux's/BSD's polling systems. This means that this plugin is only compatible with Linux, but then again, C Plugins *only* work on Linux/BSD, so that doesn't really matter
 - When offline, the plugin caches scrobbles and submits them *as soon* as your connection returns
-  - This functionality is powered by `connman`'s dbus API, meaning that you must be using `connman` as your network manager to use this. Again, don't expect me to change this
+  - You must add `--features connman` to your compile command to use this feature, and you must be using `connman` as your network manager.
   - On Android, this does not apply
 
 ## Android
@@ -39,11 +39,8 @@ script-opts=listenbrainz-user-token={YOUR_USER_TOKEN},listenbrainz-cache-path=.c
 This plugin is compatible with the Android version of MPV via [my tutorial](https://www.reddit.com/r/mpv/comments/107oasp/c_plugins_in_mpv_on_android).
 However, this plugin has specific requirements
 
-- If you want offline caching
-  - You must use MPV via the *"File Picker (Legacy)"*
-  - You must install the api29 build
-- If you don't need offline caching
-  - You must compile with `--no-default-features` to turn the `caching` feature off
+- You must use MPV via the *"File Picker (Legacy)"*
+- You must install the api29 build
 
 This plugin also requires this compilation command
 
