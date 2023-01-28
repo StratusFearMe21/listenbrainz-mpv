@@ -127,9 +127,6 @@ fn scrobble(
         }
     }
     if let Some(listened_at) = payload.listened_at {
-        if !cache_path.exists() {
-            std::fs::create_dir(&cache_path).unwrap();
-        }
         serde_json::to_writer(
             BufWriter::new(
                 std::fs::File::create(cache_path.join(format!("{}.json", listened_at))).unwrap(),
@@ -287,6 +284,10 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
             }
             _ => {}
         }
+    }
+
+    if !data.cache_path.exists() {
+        std::fs::create_dir(&data.cache_path).unwrap();
     }
 
     handle
