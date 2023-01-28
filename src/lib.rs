@@ -11,8 +11,9 @@ use calloop::{
     timer::Timer,
     EventLoop,
 };
-#[cfg(target_os = "linux")]
+#[cfg(feature = "connman")]
 use dbus::message::MatchRule;
+use id3::{Content, Tag};
 use libmpv::{
     events::{Event, PropertyData},
     Mpv, MpvStr,
@@ -20,7 +21,7 @@ use libmpv::{
 use libmpv_sys::mpv_handle;
 use serde::Serialize;
 
-#[cfg(target_os = "linux")]
+#[cfg(feature = "connman")]
 mod connman;
 
 #[derive(Debug)]
@@ -121,12 +122,10 @@ fn scrobble(
             .set("Authorization", token)
             .send_json(send);
         if status.is_ok() {
-            #[cfg(feature = "caching")]
             import_cache(token, cache_path);
             return;
         }
     }
-    #[cfg(feature = "caching")]
     if let Some(listened_at) = payload.listened_at {
         if !cache_path.exists() {
             std::fs::create_dir(&cache_path).unwrap();
@@ -141,7 +140,6 @@ fn scrobble(
     }
 }
 
-#[cfg(feature = "caching")]
 fn import_cache(token: &str, cache_path: &Path) {
     let mut read_dir = cache_path.read_dir().unwrap();
     let is_occupied = read_dir.next().is_some();
@@ -178,6 +176,39 @@ fn import_cache(token: &str, cache_path: &Path) {
             .try_for_each(|i| std::fs::remove_file(i?.path()))
             .unwrap();
     }
+}
+
+fn read_recording_id(filename: &str, data: &mut ListenbrainzData) -> Result<(), ()> {
+    let Ok(tag) = Tag::read_from_path(filename) else {
+        return Err(());
+    };
+
+    for f in tag.frames() {
+        if f.id() == "UFID" {
+            let Content::Unknown(ref u) = f.content() else {
+                continue;
+            };
+
+            let Some(delimeter_pos) = memchr::memchr(0, &u.data) else {
+                continue;
+            };
+
+            if &u.data[..delimeter_pos] != b"http://musicbrainz.org" {
+                continue;
+            }
+
+            data.payload.track_metadata.additional_info.recording_mbid =
+                if let Ok(s) = std::str::from_utf8(&u.data[delimeter_pos + 1..]) {
+                    s.to_string()
+                } else {
+                    continue;
+                };
+
+            return Ok(());
+        }
+    }
+
+    Err(())
 }
 
 #[no_mangle]
@@ -278,10 +309,14 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             .recording_mbid
                             .is_empty()
                         {
-                            eprintln!(
-                                "This song is unknown to ListenBrainz or has IDv3 tags, and \
+                            let filename: MpvStr = mpv.get_property("path").unwrap();
+
+                            if read_recording_id(&filename, data).is_err() {
+                                eprintln!(
+                                    "This song is unknown to ListenBrainz, and \
                                  cannot be rated"
-                            );
+                                );
+                            }
                         }
 
                         let feedback = LoveHate {
@@ -516,7 +551,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
 
     data.online = true;
 
-    #[cfg(all(target_os = "linux", feature = "caching"))]
+    #[cfg(feature = "connman")]
     {
         data.online = {
             let (system_connection, _sender): (calloop_dbus::DBusSource<()>, _) =
@@ -574,7 +609,6 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
     }
     drop(handle);
 
-    #[cfg(feature = "caching")]
     if data.online {
         import_cache(&data.token, &data.cache_path);
     }
