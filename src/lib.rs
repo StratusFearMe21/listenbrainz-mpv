@@ -286,6 +286,17 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
         }
     }
 
+    if data.cache_path == PathBuf::new() {
+        #[cfg(target_os = "linux")]
+        {
+            data.cache_path = dirs::cache_dir().unwrap().join("listenbrainz");
+        }
+        #[cfg(target_os = "android")]
+        {
+            data.cache_path = Path::new("/storage/emulated/0").join("listenbrainz");
+        }
+    }
+
     if !data.cache_path.exists() {
         std::fs::create_dir(&data.cache_path).unwrap();
     }
@@ -546,17 +557,6 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
             }
         })
         .unwrap();
-
-    if data.cache_path == PathBuf::new() {
-        #[cfg(target_os = "linux")]
-        {
-            data.cache_path = dirs::cache_dir().unwrap().join("listenbrainz");
-        }
-        #[cfg(target_os = "android")]
-        {
-            data.cache_path = Path::new("/storage/emulated/0").join("listenbrainz");
-        }
-    }
 
     data.online = true;
 
