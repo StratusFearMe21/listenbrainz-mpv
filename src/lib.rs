@@ -309,14 +309,10 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             .recording_mbid
                             .is_empty()
                         {
-                            let filename: MpvStr = mpv.get_property("path").unwrap();
-
-                            if read_recording_id(&filename, data).is_err() {
-                                eprintln!(
-                                    "This song is unknown to ListenBrainz, and \
+                            eprintln!(
+                                "This song is unknown to ListenBrainz, and \
                                  cannot be rated"
-                                );
-                            }
+                            );
                         }
 
                         let feedback = LoveHate {
@@ -502,6 +498,18 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                     .additional_info
                                     .release_mbid
                                     .is_empty();
+                        }
+
+                        if data
+                            .payload
+                            .track_metadata
+                            .additional_info
+                            .recording_mbid
+                            .is_empty()
+                        {
+                            let filename: MpvStr = mpv.get_property("path").unwrap();
+
+                            let _ = read_recording_id(&filename, data);
                         }
 
                         if data.scrobble {
