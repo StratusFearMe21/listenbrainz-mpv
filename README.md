@@ -37,12 +37,8 @@ script-opts=listenbrainz-user-token={YOUR_USER_TOKEN},listenbrainz-cache-path=.c
 ## Android
 
 This plugin is compatible with the Android version of MPV via [my tutorial](https://www.reddit.com/r/mpv/comments/107oasp/c_plugins_in_mpv_on_android).
-However, this plugin has specific requirements
 
-- You must use MPV via the *"File Picker (Legacy)"*
-- You must install the api29 build
-
-This plugin also requires this compilation command
+This plugin requires this compilation command
 
 ```sh
 CC=$NDK_TOOLCHAIN/bin/armv7a-linux-androideabi29-clang AR=$NDK_TOOLCHAIN/bin/llvm-ar cargo +nightly build --release -Zbuild-std --target="armv7-linux-androideabi"

@@ -208,6 +208,16 @@ fn read_recording_id(filename: &str, data: &mut ListenbrainzData) -> Result<(), 
     Err(())
 }
 
+macro_rules! scrobble_duration {
+    ($duration:expr,$speed:expr) => {
+        if $duration <= 40.0 {
+            $duration - 1.0
+        } else {
+            f64::min(240.0, $duration / 2.0)
+        } / $speed
+    };
+}
+
 #[no_mangle]
 pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
     let mut mpv = ManuallyDrop::new(Mpv::new_with_context(ctx).unwrap());
@@ -272,7 +282,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
             "listenbrainz-cache-path" => {
                 #[cfg(target_os = "linux")]
                 {
-                    data.cache_path = dirs::home_dir()
+                    data.cache_path = dirs::cache_dir()
                         .unwrap()
                         .join(i.1.to_str().unwrap())
                         .join("listenbrainz");
@@ -287,13 +297,17 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
     }
 
     if data.cache_path == PathBuf::new() {
-        #[cfg(target_os = "linux")]
-        {
-            data.cache_path = dirs::cache_dir().unwrap().join("listenbrainz");
-        }
-        #[cfg(target_os = "android")]
-        {
-            data.cache_path = Path::new("/storage/emulated/0").join("listenbrainz");
+        if let Ok(config_dir) = mpv.get_property::<MpvStr>("config-dir") {
+            data.cache_path = Path::new(&*config_dir).join("listenbrainz");
+        } else {
+            #[cfg(target_os = "linux")]
+            {
+                data.cache_path = dirs::cache_dir().unwrap().join("listenbrainz");
+            }
+            #[cfg(target_os = "android")]
+            {
+                data.cache_path = Path::new("/storage/emulated/0").join("listenbrainz");
+            }
         }
     }
 
@@ -381,9 +395,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                         let duration = mpv.get_property::<f64>("duration").unwrap();
                         let pos = mpv.get_property::<f64>("time-pos").unwrap();
                         data.scrobble_deadline = Instant::now()
-                            + Duration::from_secs_f64(
-                                (f64::min(240.0, duration / 2.0) / speed) - pos,
-                            );
+                            + Duration::from_secs_f64(scrobble_duration!(duration, speed) - pos);
                         data.payload.track_metadata.additional_info.duration_ms =
                             (duration * 1000.0) as u64;
                         timer = rx_handle
@@ -401,7 +413,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                         let speed = mpv.get_property::<f64>("speed").unwrap();
 
                         data.scrobble_deadline = Instant::now()
-                            + Duration::from_secs_f64(f64::min(240.0, duration / 2.0) / speed);
+                            + Duration::from_secs_f64(scrobble_duration!(duration, speed));
                         data.payload.track_metadata.additional_info.duration_ms =
                             (duration * 1000.0) as u64;
                         timer = rx_handle
@@ -457,7 +469,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                                                 .collect()
                                         };
                                 }
-                                "MUSICBRAINZ_TRACKID" => {
+                                "MUSICBRAINZ_TRACKID" | "http://musicbrainz.org" => {
                                     data.payload.track_metadata.additional_info.recording_mbid =
                                         i.1.to_str().unwrap().to_string();
                                 }
@@ -529,7 +541,7 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
                             let speed = mpv.get_property::<f64>("speed").unwrap();
 
                             data.scrobble_deadline = Instant::now()
-                                + Duration::from_secs_f64(f64::min(240.0, duration / 2.0) / speed);
+                                + Duration::from_secs_f64(scrobble_duration!(duration, speed));
                             data.payload.track_metadata.additional_info.duration_ms =
                                 (duration * 1000.0) as u64;
                             timer = rx_handle
