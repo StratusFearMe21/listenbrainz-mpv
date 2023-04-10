@@ -41,7 +41,16 @@ impl Default for ListenbrainzData {
             payload: Payload::default(),
             scrobble: false,
             token: String::new(),
-            cache_path: PathBuf::new(),
+            cache_path: {
+                #[cfg(target_os = "linux")]
+                {
+                    dirs::cache_dir().unwrap().join("listenbrainz")
+                }
+                #[cfg(target_os = "android")]
+                {
+                    Path::new("/storage/emulated/0").join("listenbrainz")
+                }
+            },
             online: false,
             scrobble_deadline: Instant::now(),
             pause_instant: Instant::now(),
@@ -296,18 +305,9 @@ pub extern "C" fn mpv_open_cplugin(ctx: *mut mpv_handle) -> i8 {
         }
     }
 
-    if data.cache_path == PathBuf::new() {
-        if let Ok(config_dir) = mpv.get_property::<MpvStr>("config-dir") {
+    if let Ok(config_dir) = mpv.get_property::<MpvStr>("config-dir") {
+        if !config_dir.is_empty() {
             data.cache_path = Path::new(&*config_dir).join("listenbrainz");
-        } else {
-            #[cfg(target_os = "linux")]
-            {
-                data.cache_path = dirs::cache_dir().unwrap().join("listenbrainz");
-            }
-            #[cfg(target_os = "android")]
-            {
-                data.cache_path = Path::new("/storage/emulated/0").join("listenbrainz");
-            }
         }
     }
 
